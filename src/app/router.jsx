@@ -1,11 +1,15 @@
 import React from "react";
-import { createHashRouter } from "react-router-dom";
-import HomePage from "../pages/HomePage";
-import RoomPage from "../pages/RoomPage";
-import RecommendPage from "../pages/RecommendPage";
+import { Routes, Route, Navigate } from "react-router-dom";
 
-export const router = createHashRouter([
-  { path: "/", element: <HomePage /> },
-  { path: "/r/:roomId", element: <RoomPage /> },
-  { path: "/r/:roomId/recommend", element: <RecommendPage /> },
-]);
+import HomePage from "../pages/HomePage.jsx";
+import RoomPage from "../pages/RoomPage.jsx";
+
+export default function Router() {
+  return (
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/r/:roomId" element={<RoomPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

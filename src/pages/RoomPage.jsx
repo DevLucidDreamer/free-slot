@@ -11,6 +11,42 @@ import Toast from "../components/Toast";
 import { sheetdb } from "../lib/sheetdb";
 
 /* ---------------- utils ---------------- */
+function sheetSerialToYmd(serial) {
+  // Google Sheets date serial: 1899-12-30 기준
+  const ms = Math.round((Number(serial) - 25569) * 86400 * 1000);
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function normalizeYmd(v) {
+  if (v == null) return "";
+  if (typeof v === "number") return sheetSerialToYmd(v);
+  const s = String(v).trim();
+  if (!s) return "";
+  // 숫자 문자열(예: "46041")도 처리
+  if (/^\d+(\.\d+)?$/.test(s)) return sheetSerialToYmd(s);
+  // 이미 "YYYY-MM-DD"면 그대로
+  return s;
+}
+
+function pickLiveEvents(rows) {
+  const sorted = [...(rows || [])].sort((a, b) =>
+    String(a.createdAt || "").localeCompare(String(b.createdAt || ""))
+  );
+
+  const map = new Map(); // eventId -> latest row
+  for (const r of sorted) {
+    if (!r?.eventId) continue;
+    map.set(r.eventId, r);
+  }
+
+  // 최신 row가 deletedAt 있으면 화면에서 제외
+  return [...map.values()].filter((r) => !r.deletedAt);
+}
+
 function makeId(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}_${Date.now()}`;
 }
@@ -59,9 +95,9 @@ function addDaysLocal(d, days) {
 function fmtDateTimeLocalInput(d) {
   // yyyy-MM-ddTHH:mm
   const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
-    d.getMinutes()
-  )}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
 }
 
 function toISOFromLocalDateTimeInput(value) {
@@ -77,7 +113,9 @@ function minutesBetweenISO(startISO, endISO) {
 }
 
 function sortEventsByStartAsc(list) {
-  return [...list].sort((a, b) => new Date(a.startISO).getTime() - new Date(b.startISO).getTime());
+  return [...list].sort(
+    (a, b) => new Date(a.startISO).getTime() - new Date(b.startISO).getTime()
+  );
 }
 
 function parseHHMM(hhmm) {
@@ -164,7 +202,9 @@ export default function RoomPage() {
   const { roomId } = useParams();
 
   const participantId = useMemo(() => getOrCreateParticipantId(), []);
-  const [participantName, setParticipantName] = useState(() => localStorage.getItem("free-slot.participantName") || "");
+  const [participantName, setParticipantName] = useState(
+    () => localStorage.getItem("free-slot.participantName") || ""
+  );
 
   const [room, setRoom] = useState(null);
   const [events, setEvents] = useState([]);
@@ -183,7 +223,9 @@ export default function RoomPage() {
   // 캘린더
   const [calYear, setCalYear] = useState(() => new Date().getFullYear());
   const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
-  const [selectedDay, setSelectedDay] = useState(() => yyyyMmDdLocal(new Date()));
+  const [selectedDay, setSelectedDay] = useState(() =>
+    yyyyMmDdLocal(new Date())
+  );
 
   // 일정 추가 모달
   const [openAdd, setOpenAdd] = useState(false);
@@ -191,12 +233,26 @@ export default function RoomPage() {
   const [tag, setTag] = useState("");
   const [allDay, setAllDay] = useState(false);
 
-  const [startLocal, setStartLocal] = useState(() => fmtDateTimeLocalInput(new Date()));
-  const [endLocal, setEndLocal] = useState(() => fmtDateTimeLocalInput(new Date(Date.now() + 60 * 60000)));
+  const [startLocal, setStartLocal] = useState(() =>
+    fmtDateTimeLocalInput(new Date())
+  );
+  const [endLocal, setEndLocal] = useState(() =>
+    fmtDateTimeLocalInput(new Date(Date.now() + 60 * 60000))
+  );
 
   useEffect(() => {
     localStorage.setItem("free-slot.participantName", participantName);
   }, [participantName]);
+
+  // ✅ room range 정규화(시트 숫자/문자열 시리얼 대응)
+  const roomRangeStart = useMemo(
+    () => normalizeYmd(room?.rangeStart) || "",
+    [room?.rangeStart]
+  );
+  const roomRangeEnd = useMemo(
+    () => normalizeYmd(room?.rangeEnd) || "",
+    [room?.rangeEnd]
+  );
 
   async function loadRoomAndEvents() {
     if (!roomId) return;
@@ -211,17 +267,32 @@ export default function RoomPage() {
           ? null
           : rooms
               .slice()
-              .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0];
+              .sort(
+                (a, b) =>
+                  new Date(b.createdAt || 0).getTime() -
+                  new Date(a.createdAt || 0).getTime()
+              )[0];
 
-      setRoom(latest);
+      // ✅ rangeStart/rangeEnd 정규화해서 state에 저장
+      const normalizedLatest = latest
+        ? {
+            ...latest,
+            rangeStart: normalizeYmd(latest.rangeStart),
+            rangeEnd: normalizeYmd(latest.rangeEnd),
+          }
+        : null;
 
-      const eventRows = await sheetdb.searchSheet("events", { roomId });
-      const list = Array.isArray(eventRows) ? eventRows : [];
-      setEvents(sortEventsByStartAsc(list));
+      setRoom(normalizedLatest);
 
-      if (latest?.rangeStart) setRangeStartEdit(clampDateStr(latest.rangeStart));
-      if (latest?.rangeEnd) setRangeEndEdit(clampDateStr(latest.rangeEnd));
-      setRoomNameEdit(latest?.roomName || "");
+      const eventRows = await sheetdb.getSheet("events", { roomId });
+      const inRoom = (eventRows || []).filter((r) => r?.roomId === roomId);
+      setEvents(pickLiveEvents(inRoom));
+
+      if (normalizedLatest?.rangeStart)
+        setRangeStartEdit(clampDateStr(normalizedLatest.rangeStart));
+      if (normalizedLatest?.rangeEnd)
+        setRangeEndEdit(clampDateStr(normalizedLatest.rangeEnd));
+      setRoomNameEdit(normalizedLatest?.roomName || "");
     } catch (e) {
       console.error(e);
       setError(e?.message || "로드 실패");
@@ -249,9 +320,15 @@ export default function RoomPage() {
     );
   }, [room]);
 
-  const workStartMin = useMemo(() => parseHHMM(settings.workStart), [settings.workStart]);
-  const workEndMin = useMemo(() => parseHHMM(settings.workEnd), [settings.workEnd]);
-  const minMins = useMemo(() => Number(settings.minMins) || 60, [settings.minMins]);
+  const workStartMin = useMemo(() => parseHHMM(settings.workStart), [
+    settings.workStart,
+  ]);
+  const workEndMin = useMemo(() => parseHHMM(settings.workEnd), [
+    settings.workEnd,
+  ]);
+  const minMins = useMemo(() => Number(settings.minMins) || 60, [
+    settings.minMins,
+  ]);
 
   // ✅ dayStats: 날짜별 busyCount + hasFree
   const dayStats = useMemo(() => {
@@ -286,10 +363,13 @@ export default function RoomPage() {
       }
     }
 
-    // 2) room range 안 hasFree 계산
-    if (room?.rangeStart && room?.rangeEnd) {
-      let cur = startOfDayLocal(room.rangeStart);
-      const end = startOfDayLocal(room.rangeEnd);
+    // 2) room range 안 hasFree 계산 (✅ 정규화된 range 사용)
+    const rs = roomRangeStart;
+    const re = roomRangeEnd;
+
+    if (rs && re) {
+      let cur = startOfDayLocal(rs);
+      const end = startOfDayLocal(re);
 
       for (let guard = 0; guard < 370; guard++) {
         const ds = yyyyMmDdLocal(cur);
@@ -304,14 +384,14 @@ export default function RoomPage() {
         });
         dayStatsMap.set(ds, v);
 
-        if (ds === room.rangeEnd) break;
+        if (ds === re) break;
         cur = addDaysLocal(cur, 1);
         if (cur > end) break;
       }
     }
 
     return dayStatsMap;
-  }, [events, room?.rangeStart, room?.rangeEnd, workStartMin, workEndMin, minMins]);
+  }, [events, roomRangeStart, roomRangeEnd, workStartMin, workEndMin, minMins]);
 
   const weeks = useMemo(() => monthMatrix(calYear, calMonth), [calYear, calMonth]);
 
@@ -387,8 +467,8 @@ export default function RoomPage() {
       await sheetdb.postSheet("rooms", {
         roomId,
         createdAt: new Date().toISOString(),
-        rangeStart: room?.rangeStart || rangeStartEdit || "",
-        rangeEnd: room?.rangeEnd || rangeEndEdit || "",
+        rangeStart: roomRangeStart || rangeStartEdit || "",
+        rangeEnd: roomRangeEnd || rangeEndEdit || "",
         settingsJson: room?.settingsJson || JSON.stringify(settings),
         roomName: name,
       });
@@ -465,6 +545,7 @@ export default function RoomPage() {
         endISO,
         createdAt: new Date().toISOString(),
         allDay: allDay ? "true" : "false",
+        deletedAt: "", // ✅ 소프트 삭제 대비
       };
 
       await sheetdb.postSheet("events", row);
@@ -475,6 +556,41 @@ export default function RoomPage() {
     } catch (e) {
       console.error(e);
       setError(e?.message || "일정 추가 실패");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ✅ 삭제(소프트 삭제): tombstone row 추가
+  async function onDeleteEvent(ev) {
+    if (!ev?.eventId) return;
+
+    const ok = window.confirm("이 일정을 삭제할까요?");
+    if (!ok) return;
+
+    try {
+      setLoading(true);
+
+      await sheetdb.postSheet("events", {
+        eventId: ev.eventId,
+        roomId: ev.roomId,
+        participantId: ev.participantId,
+        participantName: ev.participantName || "",
+        title: ev.title || "",
+        tag: ev.tag || "",
+        startISO: ev.startISO,
+        endISO: ev.endISO,
+        createdAt: ev.createdAt || new Date().toISOString(),
+        allDay: ev.allDay || "false",
+        deletedAt: new Date().toISOString(), // ✅ tombstone
+      });
+
+      // 로컬에서 즉시 제거(UX)
+      setEvents((prev) => prev.filter((x) => x.eventId !== ev.eventId));
+      setToast("삭제했어요");
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || "삭제 실패");
     } finally {
       setLoading(false);
     }
@@ -534,7 +650,8 @@ export default function RoomPage() {
         </div>
 
         <div className="mt-2 text-[12px] text-[color:var(--muted)]">
-          회색: 기간 밖 · 점: 일정 존재 · 녹색=가능(완전 비어있음) · 주황=주의(일부 시간 가능) · 빨강=불가능(최소 {minMins}분 공통 시간 없음)
+          회색: 기간 밖 · 점: 일정 존재 · 녹색=가능(완전 비어있음) · 주황=주의(일부 시간 가능) · 빨강=불가능(최소{" "}
+          {minMins}분 공통 시간 없음)
         </div>
 
         <div className="mt-4 grid grid-cols-7 gap-2 text-[12px] text-[color:var(--muted)]">
@@ -553,7 +670,7 @@ export default function RoomPage() {
                 const stat = dayStats.get(dayStr) || { busyCount: 0, hasFree: false };
 
                 const isThisMonth = d.getMonth() === calMonth;
-                const isInRoom = inRange(dayStr, room?.rangeStart, room?.rangeEnd);
+                const isInRoom = inRange(dayStr, roomRangeStart, roomRangeEnd);
                 const isSelected = dayStr === selectedDay;
 
                 const isBusy = (stat.busyCount || 0) > 0;
@@ -594,7 +711,9 @@ export default function RoomPage() {
                     {isInRoom && isBusy ? (
                       <div className="absolute bottom-2 left-2 flex gap-1">
                         <span className="h-1.5 w-1.5 rounded-full bg-black/40" />
-                        {stat.busyCount > 3 ? <span className="h-1.5 w-1.5 rounded-full bg-black/20" /> : null}
+                        {stat.busyCount > 3 ? (
+                          <span className="h-1.5 w-1.5 rounded-full bg-black/20" />
+                        ) : null}
                       </div>
                     ) : null}
 
@@ -708,7 +827,9 @@ export default function RoomPage() {
             </Button>
           </div>
 
-          {error ? <div className="mt-3 text-[12px] text-red-600 whitespace-pre-wrap">{error}</div> : null}
+          {error ? (
+            <div className="mt-3 text-[12px] text-red-600 whitespace-pre-wrap">{error}</div>
+          ) : null}
         </Card>
 
         {/* 선택한 날짜 일정 목록 */}
@@ -716,7 +837,9 @@ export default function RoomPage() {
           <div className="flex items-center justify-between">
             <div className="text-[15px] font-semibold">
               {selectedDay} 일정{" "}
-              <span className="ml-2 text-[12px] text-[color:var(--muted)]">({selectedDayEvents.length}개)</span>
+              <span className="ml-2 text-[12px] text-[color:var(--muted)]">
+                ({selectedDayEvents.length}개)
+              </span>
             </div>
             <Button variant="ghost" onClick={() => openAddModalForDay(selectedDay)} disabled={loading}>
               + 추가
@@ -732,11 +855,30 @@ export default function RoomPage() {
                 const isAllDay = String(ev.allDay) === "true";
                 return (
                   <div key={ev.eventId} className="rounded-[14px] bg-white border border-black/10 p-3">
-                    <div className="text-[14px] font-semibold truncate">
-                      {ev.title || "(제목 없음)"}{" "}
-                      {ev.tag ? <span className="text-[12px] text-[color:var(--muted)]">#{ev.tag}</span> : null}
-                      {isAllDay ? <span className="ml-2 text-[12px] text-[color:var(--muted)]">하루종일</span> : null}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[14px] font-semibold truncate">
+                          {ev.title || "(제목 없음)"}{" "}
+                          {ev.tag ? (
+                            <span className="text-[12px] text-[color:var(--muted)]">#{ev.tag}</span>
+                          ) : null}
+                          {isAllDay ? (
+                            <span className="ml-2 text-[12px] text-[color:var(--muted)]">하루종일</span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {/* ✅ 삭제 버튼(UI 유지, 버튼만 추가) */}
+                      <Button
+                        variant="ghost"
+                        className="text-red-600 whitespace-nowrap shrink-0"
+                        onClick={() => onDeleteEvent(ev)}
+                        disabled={loading}
+                      >
+                        삭제
+                      </Button>
                     </div>
+
                     <div className="mt-1 text-[12px] text-[color:var(--muted)]">
                       {new Date(ev.startISO).toLocaleString()} ~ {new Date(ev.endISO).toLocaleString()} · {mins}분
                     </div>
@@ -829,7 +971,9 @@ export default function RoomPage() {
             </div>
           )}
 
-          {error ? <div className="text-[12px] text-red-600 whitespace-pre-wrap">{error}</div> : null}
+          {error ? (
+            <div className="text-[12px] text-red-600 whitespace-pre-wrap">{error}</div>
+          ) : null}
 
           <div className="flex gap-2 justify-end mt-2">
             <Button variant="ghost" onClick={() => setOpenAdd(false)} disabled={loading}>
