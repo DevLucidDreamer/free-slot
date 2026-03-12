@@ -205,6 +205,10 @@ export default function RoomPage() {
   const [participantName, setParticipantName] = useState(
     () => localStorage.getItem("free-slot.participantName") || ""
   );
+  const [openNameModal, setOpenNameModal] = useState(false);
+  const [nameInput, setNameInput] = useState(
+    () => localStorage.getItem("free-slot.participantName") || ""
+  );
 
   const [room, setRoom] = useState(null);
   const [events, setEvents] = useState([]);
@@ -243,6 +247,11 @@ export default function RoomPage() {
   useEffect(() => {
     localStorage.setItem("free-slot.participantName", participantName);
   }, [participantName]);
+
+  useEffect(() => {
+    setNameInput(participantName || "");
+    setOpenNameModal(!(participantName || "").trim());
+  }, [roomId, participantName]);
 
   // ✅ room range 정규화(시트 숫자/문자열 시리얼 대응)
   const roomRangeStart = useMemo(
@@ -412,6 +421,17 @@ export default function RoomPage() {
       .writeText(window.location.href)
       .then(() => setToast("링크를 복사했어요"))
       .catch(() => setToast("복사에 실패했어요"));
+  }
+
+  function onSubmitParticipantName() {
+    const trimmed = (nameInput || "").trim();
+    if (!trimmed) {
+      setError("이름을 입력하세요.");
+      return;
+    }
+    setParticipantName(trimmed);
+    setError("");
+    setOpenNameModal(false);
   }
 
   async function onSaveRange() {
@@ -982,6 +1002,30 @@ export default function RoomPage() {
             <Button onClick={onAddEvent} disabled={loading}>
               {loading ? "저장 중…" : "저장"}
             </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ---------- 이름 입력 모달 ---------- */}
+      <Modal open={openNameModal} onClose={() => {}} title="이름 입력">
+        <div className="grid gap-3">
+          <div className="text-[13px] text-[color:var(--muted)]">
+            룸에 참여하려면 이름을 입력해 주세요.
+          </div>
+
+          <input
+            className="w-full rounded-[14px] px-3 py-2 text-[14px] bg-white border border-black/10 outline-none focus:ring-2 focus:ring-black/10"
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSubmitParticipantName();
+            }}
+            placeholder="예: 유빈"
+            autoFocus
+          />
+
+          <div className="flex justify-end">
+            <Button onClick={onSubmitParticipantName}>입장하기</Button>
           </div>
         </div>
       </Modal>
